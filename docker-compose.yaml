@@ -1,0 +1,19 @@
+version: '3'
+services:
+  ros3:
+    build: .
+    ports:
+      - "2000:2000"
+    volumes:
+      - ./:/opt/ros3
+    environment:
+      - ROS3_S3_ENDPOINT_URL=http://s3:5000
+      - ROS3_PATH_TO_WHITELIST=/opt/ros3/test/fixtures/whitelist.txt
+      - AWS_ACCESS_KEY_ID=TESTING
+      - AWS_SECRET_ACCESS_KEY=TESTING
+      - AWS_DEFAULT_REGION=us-east-1
+  s3:
+    image: motoserver/moto:latest
+    command: ["s3", "-H", "0.0.0.0", "-p5000"]
+    ports:
+      - "5000:5000"

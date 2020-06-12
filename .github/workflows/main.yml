@@ -1,0 +1,27 @@
+name: Readonly S3 CI
+
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build the docker-compose stack
+      run: docker-compose up -d
+    - name: Check running containers
+      run: docker ps -a
+    - name: Install test dependencies
+      run:  docker-compose exec -T ros3 pip install -r requirements-dev.txt
+    - name: Run flake8
+      run: docker-compose exec -T ros3 flake8 ros3 test
+    - name: Run test suite
+      run: docker-compose exec -T ros3 pytest
+    - name: Push to Dockerhub
+      uses: docker/build-push-action@v1
+      if:  contains(github.ref, 'release')
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+        repository: davlum/ros3
+        tags: latest

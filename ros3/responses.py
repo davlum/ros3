@@ -26,6 +26,9 @@ class AllowlistEntry:
 
         return AllowlistEntry(bucket_key[0], bucket_key[1])
 
+    def __str__(self):
+        return self.bucket + '/' + self.key
+
 
 class Configuration:
 
@@ -36,7 +39,7 @@ class Configuration:
             self.whitelist = None
         else:
             self.whitelist = self.read_whitelist(path_to_whitelist)
-        logging.debug("WHITELIST IS %s", self.whitelist)
+        logging.info("WHITELIST IS %s", [str(e) for e in self.whitelist])
 
     @staticmethod
     def read_whitelist(path) -> List[AllowlistEntry]:
@@ -79,26 +82,15 @@ def matches_beginning(prefix: str, allowlist_key: str) -> bool:
     return prefix.lstrip('/').find(allowlist_key.lstrip('/')) == 0
 
 
-def filter_allowlist_using_queryparams(matched_bucket_entries: List[AllowlistEntry], params: Dict[str, str]) -> List[AllowlistEntry]:
-    prefix = params.get('prefix')
-    # If the prefix parameter isn't present there's nothing to filter
-    if not prefix:
-        return matched_bucket_entries
-
-    return [entry for entry in matched_bucket_entries if matches_beginning(prefix, entry.key)]
-
-
-def is_request_on_allowlist(config: Configuration, parsed_url: ParseResult, params: Dict[str, str]) -> bool:
+def is_request_on_allowlist(config: Configuration, parsed_url: ParseResult, params: Dict[str, List[str]]) -> bool:
     if config.whitelist is not None:
         bucket, path = extract_bucket_from_path(parsed_url.path)
-        # Match the bucket
         matched_bucket_entries = [entry for entry in config.whitelist if entry.bucket == bucket]
-        # Match the query params `prefix` to the entry keys
-        matched_bucket_entries = filter_allowlist_using_queryparams(matched_bucket_entries, params)
-        # Match the path of the url to the keys
-        matched_bucket_entries = [entry for entry in matched_bucket_entries if matches_beginning(path, entry.key)]
-        return matched_bucket_entries != []
-    return False
+        if 'prefix' in params:
+            return [entry for entry in matched_bucket_entries if matches_beginning(params['prefix'][0], entry.key)] != []
+
+        return [entry for entry in matched_bucket_entries if matches_beginning(path, entry.key)] != []
+    return True
 
 
 def create_url(config: Configuration, parsed_url: ParseResult) -> str:
@@ -123,7 +115,7 @@ class S3V4Sign(AuthBase):
         self.credentials = sesh.get_credentials()
         self.region = sesh.region_name
         self.url = create_url(config, parsed_url)
-        logging.exception("Redirected URl is %s", self.url)
+        logging.info("Redirected URl is %s", self.url)
 
     def __call__(self, request: AWSRequest):
         # Method hard coded to 'GET' as this prevents making accidental 'POSTS'
@@ -181,16 +173,13 @@ def read_s3_wrapper(func: Callable, config: Configuration) -> Callable:
     def wrapper(self, request: requests.Request, full_url, headers):
         if request.method == "GET":
             parsed_url = urlparse(full_url)
-            params = getattr(request, 'params', {})
-            if is_request_on_allowlist(config, parsed_url, params):
+            if is_request_on_allowlist(config, parsed_url, parse_qs(full_url)):
                 try:
                     return mirror_req_to_s3(config, parsed_url)
                 # pylint: disable=broad-except
                 except Exception as e:
-                    logging.exception(e)
-
+                    logging.warning(e)
             return func(self, request, full_url, headers)
-
         return func(self, request, full_url, headers)
     return wrapper
 

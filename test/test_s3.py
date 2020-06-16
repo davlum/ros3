@@ -54,5 +54,3 @@ def test_get_object():
     client = get_ros3_client()
     resp = client.get_object(Bucket='real-bucket-1', Key='foo/bar/hellogoodbye.txt')
     assert resp['Body'].read().decode('utf-8') == 'hello goodbye'
-
-

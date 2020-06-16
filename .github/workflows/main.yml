@@ -11,8 +11,8 @@ jobs:
       run: docker-compose up -d
     - name: Check running containers
       run: docker ps -a
-    - name: Install test dependencies
-      run:  docker-compose exec -T ros3 pip ./check.sh
+    - name: Install test dependencies and run tests
+      run:  docker-compose exec -T ros3 ./check.sh
     - name: Push to Dockerhub
       uses: docker/build-push-action@v1
       if:  contains(github.ref, 'release')

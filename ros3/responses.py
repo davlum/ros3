@@ -1,7 +1,8 @@
 import os
 import logging
 import functools
-from typing import Callable
+from typing import Callable, List, Dict
+from urllib.parse import urlparse, parse_qs, ParseResult, urlencode
 import requests
 from requests.auth import AuthBase
 from botocore.auth import S3SigV4Auth
@@ -9,14 +10,28 @@ from botocore.awsrequest import AWSRequest
 from boto3 import session
 from moto.s3.responses import ResponseObject
 from moto.s3.models import s3_backend
-from urllib.parse import urlparse, parse_qs, ParseResult, urlencode
+
+
+class AllowlistEntry:
+
+    def __init__(self, bucket, key=''):
+        self.bucket = bucket
+        self.key = key
+
+    @staticmethod
+    def from_line(line):
+        bucket_key = line.strip().split("/", 1)
+        if len(bucket_key) == 1:
+            return AllowlistEntry(bucket_key[0])
+
+        return AllowlistEntry(bucket_key[0], bucket_key[1])
 
 
 class Configuration:
 
     def __init__(self):
         self.endpoint_url = os.environ.get('ROS3_S3_ENDPOINT_URL')
-        path_to_whitelist = os.environ.get('ROS3_PATH_TO_WHITELIST')
+        path_to_whitelist = os.environ.get('ROS3_PATH_TO_ALLOWLIST')
         if path_to_whitelist is None:
             self.whitelist = None
         else:
@@ -24,15 +39,26 @@ class Configuration:
         logging.debug("WHITELIST IS %s", self.whitelist)
 
     @staticmethod
-    def read_whitelist(path):
+    def read_whitelist(path) -> List[AllowlistEntry]:
         with open(path) as f:
-            return [x.strip() for x in f.readlines()]
-
-
-config = Configuration()
+            return [AllowlistEntry.from_line(x) for x in f.readlines()]
 
 
 def extract_bucket_from_path(path) -> (str, str):
+    """
+    :param path: The path of the request from the client
+    :return: A pair of strings containing (bucket, path)
+
+    It is assumed that requests to ros3 are S3 path-style requests of form;
+
+        https://s3.Region.amazonaws.com/bucket-name/key-name
+
+    The request is redirected using the bucket which is the first component of the path
+    to the virtual hosted style which is of form;
+
+        https://bucket-name.s3.Region.amazonaws.com/key-name
+
+    """
     paths = path.split('/')
     filtered = [p for p in paths if p]
     return filtered[0], '/' + '/'.join(filtered[1:])
@@ -40,20 +66,50 @@ def extract_bucket_from_path(path) -> (str, str):
 
 def get_host_and_path(parsed_url: ParseResult) -> (str, str):
     bucket, path = extract_bucket_from_path(parsed_url.path)
-    if config.whitelist is not None and bucket not in config.whitelist:
-        raise ValueError("Bucket is not whitelisted, will not sent requests to `s3://%s`", bucket)
     return f'https://{bucket}.s3.amazonaws.com', path
 
 
-def create_url(parsed_url: ParseResult) -> str:
+def matches_beginning(prefix: str, allowlist_key: str) -> bool:
+    """"
+    :param prefix: the value of the prefix query parameter
+    :param allowlist_key: the key from
+    :return: a bool of whether the prefix can be found on the allowlist.
+        Both values are stripped of leading `/` before comparison.
+    """
+    return prefix.lstrip('/').find(allowlist_key.lstrip('/')) == 0
+
+
+def filter_allowlist_using_queryparams(matched_bucket_entries: List[AllowlistEntry], params: Dict[str, str]) -> List[AllowlistEntry]:
+    prefix = params.get('prefix')
+    # If the prefix parameter isn't present there's nothing to filter
+    if not prefix:
+        return matched_bucket_entries
+
+    return [entry for entry in matched_bucket_entries if matches_beginning(prefix, entry.key)]
+
+
+def is_request_on_allowlist(config: Configuration, parsed_url: ParseResult, params: Dict[str, str]) -> bool:
+    if config.whitelist is not None:
+        bucket, path = extract_bucket_from_path(parsed_url.path)
+        # Match the bucket
+        matched_bucket_entries = [entry for entry in config.whitelist if entry.bucket == bucket]
+        # Match the query params `prefix` to the entry keys
+        matched_bucket_entries = filter_allowlist_using_queryparams(matched_bucket_entries, params)
+        # Match the path of the url to the keys
+        matched_bucket_entries = [entry for entry in matched_bucket_entries if matches_beginning(path, entry.key)]
+        return matched_bucket_entries != []
+    return False
+
+
+def create_url(config: Configuration, parsed_url: ParseResult) -> str:
     querystring = ''
     host, path = get_host_and_path(parsed_url)
     if parsed_url.query:
         querystring = '?' + urlencode(parse_qs(parsed_url.query, keep_blank_values=True), doseq=True)
     if config.endpoint_url:
         return config.endpoint_url + parsed_url.path + querystring
-    else:
-        return host + path + querystring
+
+    return host + path + querystring
 
 
 class S3V4Sign(AuthBase):
@@ -62,11 +118,11 @@ class S3V4Sign(AuthBase):
     from https://github.com/jmenga/requests-aws-sign
     """
 
-    def __init__(self, parsed_url: ParseResult):
+    def __init__(self, config: Configuration, parsed_url: ParseResult):
         sesh = session.Session()
         self.credentials = sesh.get_credentials()
         self.region = sesh.region_name
-        self.url = create_url(parsed_url)
+        self.url = create_url(config, parsed_url)
         logging.exception("Redirected URl is %s", self.url)
 
     def __call__(self, request: AWSRequest):
@@ -77,30 +133,30 @@ class S3V4Sign(AuthBase):
         return request
 
 
-def mirror_req_to_s3(request: requests.Request) -> (int, dict, str):
+def mirror_req_to_s3(config: Configuration, parsed_url: ParseResult) -> (int, dict, str):
     """
-    :param request: The request from the client to be mirrored to S3
+    :param parsed_url: The parsed url of the request from the client to be mirrored to S3
+    :param config: The application level configuration
     :return: A response of form (status_code, headers, content)
 
     This method will throw if the underlying request to S3 throws.
 
-    We assume requests to ros3 are S3 path-style requests of form;
+    It is assumed requests to ros3 are S3 path-style requests of form;
 
         https://s3.Region.amazonaws.com/bucket-name/key-name
 
-    The request is redirect using the bucket which is the first component of the path
+    The request is redirected using the bucket which is the first component of the path
     to the virtual hosted style which is of form;
 
         https://bucket-name.s3.Region.amazonaws.com/key-name
 
-    If clients make request to the ros3 service using virtual hosted-style requests
+    If clients make requests to the ros3 service using virtual hosted-style requests
     it will not work out well.
 
     More documentation can be found about this here;
     https://docs.aws.amazon.com/AmazonS3/latest/dev/VirtualHosting.html
     """
-    parsed_url = urlparse(request.url)
-    auth = S3V4Sign(parsed_url)
+    auth = S3V4Sign(config, parsed_url)
     real_resp = requests.get(auth.url, auth=auth)
     real_resp.raise_for_status()
     # NOTE: Returning {} as the returned headers, essentially dropping
@@ -108,9 +164,10 @@ def mirror_req_to_s3(request: requests.Request) -> (int, dict, str):
     return real_resp.status_code, {}, real_resp.content
 
 
-def read_s3_wrapper(func: Callable) -> Callable:
+def read_s3_wrapper(func: Callable, config: Configuration) -> Callable:
     """
     :param func: ResponseObject._<resource>_response method
+    :param config: The application level configuration
     :return: Wrapped ResponseObject._<resource>_response method
 
     Qu'est ce que fuck
@@ -123,27 +180,27 @@ def read_s3_wrapper(func: Callable) -> Callable:
     @functools.wraps(func)
     def wrapper(self, request: requests.Request, full_url, headers):
         if request.method == "GET":
-            try:
-                return func(self, request, full_url, headers)
-            except Exception as e:
+            parsed_url = urlparse(full_url)
+            params = getattr(request, 'params', {})
+            if is_request_on_allowlist(config, parsed_url, params):
                 try:
-                    return mirror_req_to_s3(request)
-                except Exception as other_e:
-                    logging.exception(other_e)
-                    raise e
-        else:
+                    return mirror_req_to_s3(config, parsed_url)
+                # pylint: disable=broad-except
+                except Exception as e:
+                    logging.exception(e)
+
             return func(self, request, full_url, headers)
+
+        return func(self, request, full_url, headers)
     return wrapper
 
 
 class S3GetResponse(ResponseObject):
 
-    def __init__(self, backend):
-        super().__init__(backend)
+    config = Configuration()
+    _key_response = read_s3_wrapper(ResponseObject._key_response, config)
 
-    _key_response = read_s3_wrapper(ResponseObject._key_response)
-
-    _bucket_response = read_s3_wrapper(ResponseObject._bucket_response)
+    _bucket_response = read_s3_wrapper(ResponseObject._bucket_response, config)
 
 
 S3ResponseInstance = S3GetResponse(s3_backend)

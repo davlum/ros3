@@ -3,12 +3,19 @@ import pytest
 from botocore.exceptions import ClientError
 
 
-def get_s3_client():
-    return boto3.client(
+@pytest.fixture(scope='module', autouse=True)
+def run_around_tests():
+    client = boto3.client(
         service_name='s3',
         region_name='us-east-1',
         endpoint_url='http://s3:5000',
     )
+    client.create_bucket(Bucket='real-bucket-1')
+    client.create_bucket(Bucket='real-bucket-2')
+    client.put_object(Bucket='real-bucket-1', Key='foo/bar/hellogoodbye.txt', Body='hello goodbye')
+    client.put_object(Bucket='real-bucket-1', Key='kux/foo/hello.txt', Body='hello')
+    client.put_object(Bucket='real-bucket-1', Key='foo/kux/hello.txt', Body='hello')
+    client.put_object(Bucket='real-bucket-2', Key='foo/bar/goodbye.txt', Body='goodbye')
 
 
 def get_ros3_client():
@@ -19,18 +26,7 @@ def get_ros3_client():
     )
 
 
-def load_s3():
-    client = get_s3_client()
-    client.create_bucket(Bucket='real-bucket-1')
-    client.create_bucket(Bucket='real-bucket-2')
-    client.put_object(Bucket='real-bucket-1', Key='foo/bar/hellogoodbye.txt', Body='hello goodbye')
-    client.put_object(Bucket='real-bucket-1', Key='kux/foo/hello.txt', Body='hello')
-    client.put_object(Bucket='real-bucket-1', Key='foo/kux/hello.txt', Body='hello')
-    client.put_object(Bucket='real-bucket-2', Key='foo/bar/goodbye.txt', Body='goodbye')
-
-
 def test_create_bucket():
-    load_s3()
     client = get_ros3_client()
     client.create_bucket(Bucket='fake-bucket')
     client.put_object(Bucket='fake-bucket', Key='foo/bar/goodbye.txt', Body='goodbye')
@@ -58,3 +54,5 @@ def test_get_object():
     client = get_ros3_client()
     resp = client.get_object(Bucket='real-bucket-1', Key='foo/bar/hellogoodbye.txt')
     assert resp['Body'].read().decode('utf-8') == 'hello goodbye'
+
+

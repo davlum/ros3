@@ -96,3 +96,17 @@ def test_get_object_not_whitelisted_keys():
         client.get_object(Bucket='real-bucket-3', Key='kux/hello.txt')
     err_dict = err.value.response['Error']
     assert err_dict['Message'] == 'The specified key does not exist.'
+
+
+def test_head_object_whitelisted():
+    client = get_ros3_client()
+    resp = client.head_object(Bucket='real-bucket-1', Key='foo/bar/hellogoodbye.txt')
+    assert resp['ContentLength'] == 13
+
+
+def test_head_object_not_whitelisted():
+    client = get_ros3_client()
+    with pytest.raises(ClientError) as err:
+        client.head_object(Bucket='real-bucket-2', Key='foo/bar/goodbye.txt')
+    err_dict = err.value.response['Error']
+    assert err_dict['Message'] == 'Not Found'

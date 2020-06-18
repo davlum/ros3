@@ -171,7 +171,7 @@ def read_s3_wrapper(func: Callable, config: Configuration) -> Callable:
     """
     @functools.wraps(func)
     def wrapper(self, request: requests.Request, full_url, headers):
-        if request.method == "GET":
+        if request.method in ("GET", "HEAD"):
             parsed_url = urlparse(full_url)
             if is_request_on_allowlist(config, parsed_url, parse_qs(full_url)):
                 try:

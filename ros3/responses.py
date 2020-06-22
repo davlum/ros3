@@ -83,6 +83,9 @@ def matches_beginning(prefix: str, allowlist_key: str) -> bool:
 
 
 def is_request_on_allowlist(config: Configuration, parsed_url: ParseResult, params: Dict[str, List[str]]) -> bool:
+    if parsed_url.path == '/':
+        return False
+
     if config.whitelist is not None:
         bucket, path = extract_bucket_from_path(parsed_url.path)
         matched_bucket_entries = [entry for entry in config.whitelist if entry.bucket == bucket]

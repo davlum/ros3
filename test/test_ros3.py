@@ -110,3 +110,10 @@ def test_head_object_not_whitelisted():
         client.head_object(Bucket='real-bucket-2', Key='foo/bar/goodbye.txt')
     err_dict = err.value.response['Error']
     assert err_dict['Message'] == 'Not Found'
+
+
+def test_list_buckets():
+    client = get_ros3_client()
+    resp = client.list_buckets()
+    buckets = {entry['Name'] for entry in resp['Buckets']}
+    assert buckets == {'real-bucket-3', 'fake-bucket'}

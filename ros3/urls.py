@@ -13,7 +13,9 @@ url_paths = {
     # subdomain key of path-based bucket
     "{0}/(?P<key_or_bucket_name>[^/]+)/?$": S3ResponseInstance.ambiguous_response,
     # path-based bucket + key
+    # pylint: disable=no-member
     "{0}/(?P<bucket_name_path>[^/]+)/(?P<key_name>.+)": S3ResponseInstance.key_response,
     # subdomain bucket + key with empty first part of path
+    # pylint: disable=no-member
     "{0}//(?P<key_name>.*)$": S3ResponseInstance.key_response,
 }

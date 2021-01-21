@@ -35,11 +35,13 @@ class Configuration:
     def __init__(self):
         self.endpoint_url = os.environ.get('ROS3_S3_ENDPOINT_URL')
         path_to_whitelist = os.environ.get('ROS3_PATH_TO_ALLOWLIST')
+
         if path_to_whitelist is None:
             self.whitelist = None
+            logging.warning("No allowlist configured. Will proxy all read requests to AWS")
         else:
             self.whitelist = self.read_whitelist(path_to_whitelist)
-        logging.info("WHITELIST IS %s", [str(e) for e in self.whitelist])
+            logging.warning("Allowlist is: %s", [str(e) for e in self.whitelist])
 
     @staticmethod
     def read_whitelist(path) -> List[AllowlistEntry]:
